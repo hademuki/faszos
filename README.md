@@ -1,2 +1,2 @@
-# faszos
+# tronfosztas
 ilyesmik stb
