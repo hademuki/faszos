@@ -3,6 +3,8 @@
 #include <vector>
 #include <string>
 #include <map>
+#include <functional>
+#include <windows.h>
 
 using namespace std;
 
@@ -48,15 +50,83 @@ struct Pipe {
     }
 };
 
-// Pálya méret
-struct Board {
-    int rows, cols;
+struct Cell {
+    string color = "";      // A cella színe
+    bool isFlooded = false; // Anyag áthalad-e a cellán
 };
 
-// Beolvasási funkciók
-void readBoard(ifstream &file, Board &board) {
-    file >> board.rows >> board.cols;
+struct Board {
+    int rows, cols;
+    vector<vector<Cell>> grid; // 2D mátrix a pálya celláihoz
+
+    // Konstruktor: inicializálja a mátrixot
+    Board(int r, int c) : rows(r), cols(c), grid(r, vector<Cell>(c)) {}
+
+    // Ellenőrzi, hogy egy cella a pályán belül van-e
+    bool isValid(int x, int y) const {
+        return x >= 0 && x < cols && y >= 0 && y < rows;
+    }
+
+    // Ellenőrzi, hogy egy cella szabad-e a megadott szín számára
+    bool canFlow(int x, int y, const string &color) const {
+        if (!isValid(x, y)) return false; // Határon kívüli cella
+        const Cell &cell = grid[y][x];
+        return cell.color == "" || cell.color == color; // Csak azonos szín engedett
+    }
+
+    // Beállítja az anyagot egy cellára
+    void setFlow(int x, int y, const string &color) {
+        if (isValid(x, y)) {
+            Cell &cell = grid[y][x];
+            cell.color = color;
+            cell.isFlooded = true;
+        }
+    }
+};
+
+
+void simulateFlow(Board &board, const Source &source, const string &color, vector<Pipe> &pipes, int consumerX, int consumerY) {
+    // Rekurzív segédfüggvény a mélységi kereséshez
+    function<bool(int, int)> dfs = [&](int x, int y) {
+        if (!board.isValid(x, y)) return false; // Határon kívül
+        if (board.grid[y][x].color != color && board.grid[y][x].color != "") return false; // Színkeveredés
+        if (x == consumerX && y == consumerY) return true; // Elértük a fogyasztót
+
+        // Jelöljük a cellát elárasztottnak
+        board.setFlow(x, y, color);
+
+        // Négy irányú keresés
+        for (const auto &pipe : pipes) {
+            if (pipe.x == x && pipe.y == y) {
+                for (const string &dir : pipe.connections) {
+                    int nx = x, ny = y;
+                    if (dir == "N") ny--;
+                    else if (dir == "S") ny++;
+                    else if (dir == "E") nx++;
+                    else if (dir == "W") nx--;
+
+                    // Rekurzív hívás az új cellára
+                    if (dfs(nx, ny)) return true;
+                }
+            }
+        }
+        return false;
+    };
+
+    // Induljunk a forrásból
+    if (!dfs(source.x, source.y + 1)) {
+        cerr << "Szivárgás vagy szétkapcsolt pálya! A fogyasztó nem érhető el!\n";
+    }
 }
+
+
+
+// Beolvasási funkciók
+void readBoardSize(ifstream &file, int &rows, int &cols) {
+    file >> rows >> cols; // Kiolvassuk a sorok és oszlopok számát
+    cout << "Pályaméret: " << rows << "x" << cols << "\n";
+}
+
 
 void readSources(ifstream &file, vector<Source> &sources) {
     int count;
@@ -119,85 +189,174 @@ void readPhases(ifstream &file, vector<string> &phases) {
     }
 }
 
+void generateOutput(const Board &board, const vector<Source> &sources, const vector<Consumer> &consumers,
+                    const vector<Pipe> &pipes, const vector<string> &phases, const vector<string> &tapStates) {
+    ofstream outFile("output.txt");
+    if (!outFile.is_open()) {
+        cerr << "Nem sikerült megnyitni az output fájlt!\n";
+        return;
+    }
+
+    // Időmök elhelyezése
+    outFile << "[Placement]\n";
+    for (const auto &pipe : pipes) {
+        if (pipe.x != -1 && pipe.y != -1) { // Csak elhelyezett csöveket írjunk ki
+            outFile << pipe.id << " " << pipe.x << " " << pipe.y;
+            for (const auto &dir : pipe.connections) {
+                outFile << " " << dir;
+            }
+            outFile << "\n";
+        }
+    }
+
+    // Fázisok eredményei
+    outFile << "\n[Phases]\n";
+    for (size_t i = 0; i < phases.size(); ++i) {
+        outFile << "Phase " << i + 1 << ": " << phases[i] << "\n";
+        outFile << "Taps: " << tapStates[i] << "\n";
+        outFile << "Flooded consumers: ";
+        for (const auto &consumer : consumers) {
+            if (consumer.flooded) {
+                outFile << consumer.id << " ";
+            }
+        }
+        outFile << "\n\n";
+    }
+
+    outFile.close();
+    cout << "Output generálva az 'output.txt' fájlba.\n";
+}
+
+
+
+
 // Megoldási algoritmus
-void solve(const Board &board, vector<Source> &sources, vector<Consumer> &consumers, vector<Pipe> &pipes, vector<string> &phases) {
-    cout << "Pályaméret: " << board.rows << "x" << board.cols << "\n";
+void solve(Board &board, vector<Source> &sources, vector<Consumer> &consumers, vector<Pipe> &pipes,
+           vector<string> &phases) {
+    vector<string> tapStates; // Csapok állapota fázisonként
+
+    // Minden fázist feldolgozunk
     for (const auto &phase : phases) {
         cout << "Fázis: " << phase << "\n";
-            for (auto &source : sources) {
+            string tapState = "";
+
+        // Aktív források feldolgozása
+        for (auto &source : sources) {
             if (source.color == phase) {
                 for (auto &consumer : consumers) {
                     if (consumer.color == phase) {
                         cout << "Forrás (" << source.x << ", " << source.y << ") összekötése "
                              << "fogyasztóval (" << consumer.x << ", " << consumer.y << ")\n";
 
-                            // Koordináták alapján csövek elhelyezése
-                            int cx1 = source.x + 1, cy1 = source.y;     // Első cső helye
-                        int cx2 = source.x + 1, cy2 = source.y + 1; // Második cső helye
-
-                        // Forgatások az első csőhöz (W, S irány)
-                        for (auto &pipe : pipes) {
-                            while (!pipe.fits("W", "S")) {
-                                pipe.rotate();
+                            // Csövek elhelyezése
+                            for (auto &pipe : pipes) {
+                            if (pipe.x == -1 && pipe.y == -1) { // Csak nem használt csöveket helyezünk el
+                                // Első cső
+                                pipe.x = source.x;
+                                pipe.y = source.y + 1; // Jobbra lépünk
+                                while (!pipe.fits("E", "S")) {
+                                    pipe.rotate();
+                                }
+                                board.setFlow(pipe.x, pipe.y, phase); // Anyag beállítása
+                                cout << "Első cső elhelyezve (" << pipe.x << ", " << pipe.y
+                                     << ") irányok: " << pipe.connections[0] << ", " << pipe.connections[1] << "\n";
+                                    break;
                             }
-                            pipe.x = cx1;
-                            pipe.y = cy1;
-                            cout << "Első cső elhelyezve (" << pipe.x << ", " << pipe.y
-                                 << ") irányok: " << pipe.connections[0] << ", " << pipe.connections[1] << "\n";
-                                break;
                         }
 
-                        // Forgatások a második csőhöz (N, E irány)
                         for (auto &pipe : pipes) {
-                            while (!pipe.fits("N", "E")) {
-                                pipe.rotate();
+                            if (pipe.x == -1 && pipe.y == -1) { // Második cső
+                                pipe.x = source.x + 1;
+                                pipe.y = source.y + 1; // Le és jobbra lépünk
+                                while (!pipe.fits("N", "E")) {
+                                    pipe.rotate();
+                                }
+                                board.setFlow(pipe.x, pipe.y, phase); // Anyag beállítása
+                                cout << "Második cső elhelyezve (" << pipe.x << ", " << pipe.y
+                                     << ") irányok: " << pipe.connections[0] << ", " << pipe.connections[1] << "\n";
+                                    break;
                             }
-                            pipe.x = cx2;
-                            pipe.y = cy2;
-                            cout << "Második cső elhelyezve (" << pipe.x << ", " << pipe.y
-                                 << ") irányok: " << pipe.connections[0] << ", " << pipe.connections[1] << "\n";
-                                break;
                         }
 
-                        consumer.flooded = true;
-                        cout << "Fogyasztó elárasztva (" << consumer.x << ", " << consumer.y << ")\n";
+                        for (auto &pipe : pipes) {
+                            if (pipe.x == -1 && pipe.y == -1) { // Harmadik cső
+                                pipe.x = source.x + 2;
+                                pipe.y = source.y + 1; // Még egyet le lépünk
+                                while (!pipe.fits("W", "S")) {
+                                    pipe.rotate();
+                                }
+                                board.setFlow(pipe.x, pipe.y, phase); // Anyag beállítása
+                                cout << "Harmadik cső elhelyezve (" << pipe.x << ", " << pipe.y
+                                     << ") irányok: " << pipe.connections[0] << ", " << pipe.connections[1] << "\n";
+                                    break;
+                            }
+                        }
+
+                        // Anyag áramlásának ellenőrzése
+                        simulateFlow(board, source, phase, pipes, consumer.x, consumer.y);
+
+                        // Ellenőrizzük, hogy a fogyasztót sikerült-e elárasztani
+                        if (board.grid[consumer.y][consumer.x].isFlooded) {
+                            consumer.flooded = true;
+                            cout << "Fogyasztó elárasztva (" << consumer.x << ", " << consumer.y << ")\n";
+                        } else {
+                            consumer.flooded = false;
+                            cerr << "Hiba: Fogyasztó nem érhető el a (" << consumer.x << ", " << consumer.y << ") pozícióban!\n";
+                        }
                     }
                 }
             }
         }
+        tapStates.push_back(tapState);
     }
+
+    // Output generálása
+    generateOutput(board, sources, consumers, pipes, phases, tapStates);
 }
 
+
+
+
+
+
 int main() {
-    // Adatok tárolása
-    Board board;
+
+    // Állítsd a konzol kódolását UTF-8-ra
+    SetConsoleOutputCP(CP_UTF8);
+
+    // Ha szükséges, a bemeneti kódolást is állítsd (pl. fájlbeolvasáshoz)
+    SetConsoleCP(CP_UTF8);
+
+    ifstream inputFile("csovek.txt");
+    if (!inputFile.is_open()) {
+        cerr << "Nem sikerült megnyitni az input fájlt!\n";
+        return 1;
+    }
+
+    int rows = 0, cols = 0;
     vector<Source> sources;
     vector<Consumer> consumers;
     vector<Pipe> pipes;
     vector<string> phases;
 
-    // Bemenet beolvasása
-    ifstream file("csovek.txt");
-    if (!file.is_open()) {
-        cerr << "Nem sikerült megnyitni az input fájlt!\n";
-        return 1;
-    }
-
     string section;
-    while (file >> section) {
+    while (inputFile >> section) {
         if (section == "[Board]") {
-            readBoard(file, board);
+            readBoardSize(inputFile, rows, cols); // Pályaméret beolvasása
         } else if (section == "[Sources]") {
-            readSources(file, sources);
+            readSources(inputFile, sources);
         } else if (section == "[Consumers]") {
-            readConsumers(file, consumers);
+            readConsumers(inputFile, consumers);
         } else if (section == "[Pipes]") {
-            readPipes(file, pipes);
+            readPipes(inputFile, pipes);
         } else if (section == "[Phases]") {
-            readPhases(file, phases);
+            readPhases(inputFile, phases);
         }
     }
-    file.close();
+    inputFile.close();
+
+    // Board inicializálása a beolvasott méretekkel
+    Board board(rows, cols);
 
     // Megoldás futtatása
     solve(board, sources, consumers, pipes, phases);

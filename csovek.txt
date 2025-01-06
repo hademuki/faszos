@@ -1,5 +1,5 @@
 [Board]
-2 3
+3 3
 
 [Sources]
 1
@@ -7,7 +7,7 @@ source_1 zöld 0 0 1 E
 
 [Consumers]
 1
-consumer_1 zöld 2 1 1 W
+consumer_1 zöld 2 2 1 N
 
 [Pipes]
 2
