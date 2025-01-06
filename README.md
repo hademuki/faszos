@@ -1,3 +1,3 @@
 # tronfosztas
 ilyesmik stb
-Na sracok feltoltottem a txt fajlt amit be lehet olvasni. A feltoltott peldabol az elso mukodik, de szerintem a jelen allas szerint minden mukodik, ugyhogy hibat is bele kene rakni
+Friisitettem a dolgokat mar van kifolyas is, de kell meg tesztelni
